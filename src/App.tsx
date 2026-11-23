@@ -30,6 +30,7 @@ export default function App() {
   useEffect(() => {
     const update = (time: number) => {
       lenisRef.current?.lenis?.raf(time * 1000)
+      ScrollTrigger.update()
     }
 
     gsap.ticker.add(update)

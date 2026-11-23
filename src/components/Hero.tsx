@@ -103,7 +103,6 @@ export function Hero() {
       let duration = 0
       let targetTime = 0
       let seekFrame = 0
-      let seekingWaits = 0
       let unlocked = false
       let introActive = true
       let lastChapter = chapter.textContent ?? ''
@@ -126,31 +125,44 @@ export function Hero() {
       const setHint = gsap.quickSetter(hint, 'opacity')
       const setFill = gsap.quickSetter(fill, 'scaleY')
 
-      const bufferedEnd = () => {
-        const ranges = video.buffered
-        let end = 0
-        for (let index = 0; index < ranges.length; index += 1) {
-          end = Math.max(end, ranges.end(index))
-        }
-        return end
-      }
+      let seekStarted = 0
+      let stallTimer = 0
+
+      const desiredTime = () => Math.min(Math.max(targetTime, 0), Math.max(duration - 0.04, 0))
 
       const flushSeek = () => {
-        seekFrame = 0
-        if (!duration || video.readyState < 2) return
-        if (video.seeking) {
-          seekingWaits += 1
-          if (seekingWaits < 12) {
-            seekFrame = window.requestAnimationFrame(flushSeek)
-            return
-          }
+        if (seekFrame) {
+          window.cancelAnimationFrame(seekFrame)
+          seekFrame = 0
         }
-        seekingWaits = 0
-        const buffered = Math.max(bufferedEnd() - 0.05, 0)
-        const safeEnd = video.readyState >= 4 ? duration : buffered
-        const next = Math.min(targetTime, safeEnd)
+        if (!duration || video.readyState < 2) return
+        const stalled =
+          video.seeking && (seekStarted === 0 || performance.now() - seekStarted > 240)
+        if (video.seeking && !stalled) return
+        const next = desiredTime()
         if (Math.abs(video.currentTime - next) < 1 / 48) return
+        seekStarted = performance.now()
         video.currentTime = next
+        window.clearTimeout(stallTimer)
+        stallTimer = window.setTimeout(() => {
+          if (!duration || !video.seeking) return
+          seekStarted = 0
+          flushSeek()
+        }, 240)
+      }
+
+      const queueSeek = (time: number) => {
+        targetTime = time
+        if (!video.seeking && video.readyState >= 2) {
+          flushSeek()
+          return
+        }
+        if (!seekFrame) seekFrame = window.requestAnimationFrame(flushSeek)
+      }
+
+      const catchUp = () => {
+        if (!duration || Math.abs(video.currentTime - desiredTime()) < 1 / 48) return
+        queueSeek(targetTime)
       }
 
       const unlock = () => {
@@ -160,14 +172,9 @@ export function Hero() {
           .then(() => {
             video.pause()
             unlocked = true
-            if (!seekFrame) seekFrame = window.requestAnimationFrame(flushSeek)
+            catchUp()
           })
           .catch(() => undefined)
-      }
-
-      const queueSeek = (time: number) => {
-        targetTime = time
-        if (!seekFrame) seekFrame = window.requestAnimationFrame(flushSeek)
       }
 
       const apply = (progress: number) => {
@@ -253,9 +260,7 @@ export function Hero() {
       }
 
       const onBuffer = () => {
-        if (!duration) return
-        if (Math.abs(video.currentTime - targetTime) < 1 / 24) return
-        queueSeek(targetTime)
+        catchUp()
       }
 
       hintLabel.textContent = video.readyState >= 3 ? 'Scroll' : 'Preparing'
@@ -266,6 +271,8 @@ export function Hero() {
       video.addEventListener('loadedmetadata', onMediaReady)
       video.addEventListener('durationchange', rememberDuration)
       video.addEventListener('canplay', onReady)
+      video.addEventListener('loadeddata', catchUp)
+      video.addEventListener('seeked', catchUp)
       if (touchScreen) video.addEventListener('canplay', unlock)
       video.addEventListener('progress', onBuffer)
       video.addEventListener('error', onError)
@@ -298,11 +305,14 @@ export function Hero() {
       })
 
       return () => {
+        window.clearTimeout(stallTimer)
         window.cancelAnimationFrame(refreshId)
         window.cancelAnimationFrame(seekFrame)
         video.removeEventListener('loadedmetadata', onMediaReady)
         video.removeEventListener('durationchange', rememberDuration)
         video.removeEventListener('canplay', onReady)
+        video.removeEventListener('loadeddata', catchUp)
+        video.removeEventListener('seeked', catchUp)
         if (touchScreen) video.removeEventListener('canplay', unlock)
         video.removeEventListener('progress', onBuffer)
         video.removeEventListener('error', onError)
