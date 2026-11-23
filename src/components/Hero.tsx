@@ -5,8 +5,9 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { useLenis } from 'lenis/react'
 import { drift, frameAt, rise } from '../lib/hero-frames.ts'
 
-const FILM_SRC = '/videos/01_HERO_OPENING.mp4'
-const POSTER_SRC = '/videos/01_HERO_OPENING-poster.jpg'
+const publicBase = import.meta.env.BASE_URL
+const FILM_SRC = `${publicBase}videos/01_HERO_OPENING.mp4`
+const POSTER_SRC = `${publicBase}videos/01_HERO_OPENING-poster.jpg`
 
 export function Hero() {
   const lenis = useLenis()
@@ -93,11 +94,17 @@ export function Hero() {
       }
 
       video.preload = 'auto'
+      video.muted = true
+      video.defaultMuted = true
+      video.setAttribute('playsinline', '')
+      video.setAttribute('webkit-playsinline', '')
       video.pause()
 
       let duration = 0
       let targetTime = 0
       let seekFrame = 0
+      let seekingWaits = 0
+      let unlocked = false
       let introActive = true
       let lastChapter = chapter.textContent ?? ''
       let introTween: gsap.core.Tween | null = null
@@ -119,15 +126,43 @@ export function Hero() {
       const setHint = gsap.quickSetter(hint, 'opacity')
       const setFill = gsap.quickSetter(fill, 'scaleY')
 
+      const bufferedEnd = () => {
+        const ranges = video.buffered
+        let end = 0
+        for (let index = 0; index < ranges.length; index += 1) {
+          end = Math.max(end, ranges.end(index))
+        }
+        return end
+      }
+
       const flushSeek = () => {
         seekFrame = 0
         if (!duration || video.readyState < 2) return
         if (video.seeking) {
-          seekFrame = window.requestAnimationFrame(flushSeek)
-          return
+          seekingWaits += 1
+          if (seekingWaits < 12) {
+            seekFrame = window.requestAnimationFrame(flushSeek)
+            return
+          }
         }
-        if (Math.abs(video.currentTime - targetTime) < 1 / 48) return
-        video.currentTime = targetTime
+        seekingWaits = 0
+        const buffered = Math.max(bufferedEnd() - 0.05, 0)
+        const safeEnd = video.readyState >= 4 ? duration : buffered
+        const next = Math.min(targetTime, safeEnd)
+        if (Math.abs(video.currentTime - next) < 1 / 48) return
+        video.currentTime = next
+      }
+
+      const unlock = () => {
+        if (unlocked) return
+        const pending = video.play()
+        pending
+          .then(() => {
+            video.pause()
+            unlocked = true
+            if (!seekFrame) seekFrame = window.requestAnimationFrame(flushSeek)
+          })
+          .catch(() => undefined)
       }
 
       const queueSeek = (time: number) => {
@@ -212,14 +247,30 @@ export function Hero() {
         section.classList.add('hero--missing')
       }
 
+      const onMediaReady = () => {
+        rememberDuration()
+        ScrollTrigger.refresh()
+      }
+
+      const onBuffer = () => {
+        if (!duration) return
+        if (Math.abs(video.currentTime - targetTime) < 1 / 24) return
+        queueSeek(targetTime)
+      }
+
       hintLabel.textContent = video.readyState >= 3 ? 'Scroll' : 'Preparing'
       if (video.readyState >= 1) rememberDuration()
 
-      video.addEventListener('loadedmetadata', rememberDuration)
+      const touchScreen = window.matchMedia('(pointer: coarse)').matches
+
+      video.addEventListener('loadedmetadata', onMediaReady)
       video.addEventListener('durationchange', rememberDuration)
       video.addEventListener('canplay', onReady)
+      if (touchScreen) video.addEventListener('canplay', unlock)
+      video.addEventListener('progress', onBuffer)
       video.addEventListener('error', onError)
-      video.load()
+      window.addEventListener('pointerdown', unlock, { passive: true })
+      window.addEventListener('load', onMediaReady)
 
       const pin = (end: string) => {
         ScrollTrigger.create({
@@ -242,12 +293,21 @@ export function Hero() {
         pin('+=300%')
       })
 
+      const refreshId = window.requestAnimationFrame(() => {
+        ScrollTrigger.refresh()
+      })
+
       return () => {
+        window.cancelAnimationFrame(refreshId)
         window.cancelAnimationFrame(seekFrame)
-        video.removeEventListener('loadedmetadata', rememberDuration)
+        video.removeEventListener('loadedmetadata', onMediaReady)
         video.removeEventListener('durationchange', rememberDuration)
         video.removeEventListener('canplay', onReady)
+        if (touchScreen) video.removeEventListener('canplay', unlock)
+        video.removeEventListener('progress', onBuffer)
         video.removeEventListener('error', onError)
+        window.removeEventListener('pointerdown', unlock)
+        window.removeEventListener('load', onMediaReady)
       }
     },
     { scope: sectionRef },
@@ -263,7 +323,7 @@ export function Hero() {
           poster={POSTER_SRC}
           muted
           playsInline
-          preload="metadata"
+          preload="auto"
           disablePictureInPicture
           aria-label="Noiré Studio opening film"
         />
