@@ -4,7 +4,9 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { ReactLenis, useLenis, type LenisRef } from 'lenis/react'
 import 'lenis/dist/lenis.css'
 import { Epilogue } from './components/Epilogue.tsx'
+import { FilmChapter } from './components/FilmChapter.tsx'
 import { Hero } from './components/Hero.tsx'
+import { chapters, readyChapters } from './lib/chapters.ts'
 
 const lenisOptions = {
   autoRaf: false,
@@ -51,6 +53,9 @@ export default function App() {
       <ScrollTriggerSync />
       <main>
         <Hero />
+        {readyChapters(chapters).map((chapter) => (
+          <FilmChapter key={chapter.id} chapter={chapter} />
+        ))}
         <Epilogue />
       </main>
     </ReactLenis>
